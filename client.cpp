@@ -183,7 +183,13 @@ int chatclient::recvfile()
         cout << " Filename Read error" << endl;
         return -1;
     }*/
-    cout<<" Recieved file with name "<<filename<<endl;
+    cout<<"waiting for file size"<<endl;
+    int size = 0;
+    int status = 0;
+    do{
+        status =::read(m_sockfd, &size,sizeof(int));
+    }while(status <= 0);
+    cout<<" Recieved file with name "<<filename<<" size " <<size<<endl;
     cout<<"saved dir client "<<savedir<<endl;
     filename = savedir+"/"+filename;
     std::ofstream out(filename, std::ios::out | std::ios::binary);
@@ -191,23 +197,21 @@ int chatclient::recvfile()
         cout<<"fail to open "<<endl;
         return -1;
     }
-    long total;
+    long total = 0;
     cout<<"Writing to file "<<endl;
     int readsz = 0;
-    do {
+     while(total < size){
         string temp;
         readsz = recvfrom(temp);
         total += readsz;
         cout<<"readsz "<<readsz<<endl;
-        if(readsz == 0)
-            break;
         if(readsz < 0) {
             cout << "read error" << endl;
             return -1;
         }
-        //cout<<temp<<endl;
+        cout<<"total" <<total<<" size " <<size<<endl;
         out.write(temp.c_str(), temp.size());
-    } while(readsz >0);
+    }
     cout<<"read finished "<<endl;
     out.close();
     return total;

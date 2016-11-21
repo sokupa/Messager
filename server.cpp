@@ -22,7 +22,7 @@
 #define MAXCLIENT 100
 #define BASE 6000
 #define MAXGROUP 5
-# define BUFSIZE 256
+#define BUFSIZE 256
 using std::endl;
 using std::cout;
 using std::cin;
@@ -71,6 +71,7 @@ public:
     int recvfile();
     string getpath();
     string clientname();
+    int getfilesize(std::ifstream& file);
     bool createdir(string);
 };
 unordered_set<int> chatserver::sockets;
@@ -217,36 +218,53 @@ bool chatserver::createdir(string path)
     cout << success << endl;
     return success;
 }
+int chatserver::getfilesize(std::ifstream& file)
+{
+    file.ignore(std::numeric_limits<std::streamsize>::max());
+    int size = file.gcount();
+    file.clear(); //  Since ignore will have set eof.
+    file.seekg(0, std::ios_base::beg);
+    return size;
+}
 bool chatserver::sendfile()
 {
     string savedir = getpath(); // return path of current exe running
+    savedir = savedir + "_dir";
+    createdir(savedir);
     cout << savedir << endl;
     cout << "enter file name" << endl;
     string filename;
     cin >> filename;
-    savedir = savedir + "_dir";
-    createdir(savedir);
+    savedir = savedir + "/" + filename;
+    std::ifstream in(savedir, std::ios::in | std::ios::binary);
+    if(!in) {
+        cout << "error in opening file" << endl;
+        return false;
+    }
+    int size = getfilesize(in);
     // send filename to the client
     cout << "sendfilename to client " << filename << endl;
     if(sendto(false, filename) < 0) {
         cout << "sending error " << endl;
         return false;
     }
-    // open the file in binary mode
-    savedir = savedir + "/" + filename;
+    // send file size to client
+
+    int status = 0;
+    cout << "file size " << size << endl;
+    do {
+        status = htonl(::send(m_sockfd,(void *)&size,sizeof(int),MSG_NOSIGNAL));
+    } while(status < 0);
+
     cout << savedir << endl;
     cout << "sendfile to client " << endl;
-    std::ifstream in(savedir, std::ios::in | std::ios::binary);
-    if(!in) {
-        cout << "error in opening file" << endl;
-        return false;
-    }
+
     int sentbytes = 0;
     int read;
     while(true) {
         char buf[BUFSIZE];
         int read = in.read(buf, BUFSIZE).gcount();
-        
+
         // cout<<"bufdata "<<buf<<endl;
         string msg(buf, read);
         // cout<<msg;
