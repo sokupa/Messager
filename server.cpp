@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <arpa/inet.h>
+#include <arpa/inet.h>
 #include <cstring> //for memset
 #include <ctime>
 #include <errno.h>
@@ -226,6 +227,7 @@ int chatserver::getfilesize(std::ifstream& file)
     file.seekg(0, std::ios_base::beg);
     return size;
 }
+
 bool chatserver::sendfile()
 {
     string savedir = getpath(); // return path of current exe running
@@ -242,57 +244,54 @@ bool chatserver::sendfile()
         return false;
     }
     int size = getfilesize(in);
+    // uint32_t usz = htonl(size);
+    // uint32_t tsize = ntohl(usz);
     // send filename to the client
     cout << "sendfilename to client " << filename << endl;
-    if(sendto(false, filename) < 0) {
+    /*if(sendto(false, filename) < 0) {
         cout << "sending error " << endl;
         return false;
-    }
-    // send file size to client
-
+    }*/
     int status = 0;
-    cout << "file size " << size << endl;
+    int len = filename.size();
+    // send filename size
     do {
-        status = htonl(::send(m_sockfd,(void *)&size,sizeof(int),MSG_NOSIGNAL));
+        status = ::send(m_sockfd, (void*)&len, sizeof(int), 0);
+    } while(status <= 0);
+    // send filename
+    do {
+        status = ::send(m_sockfd, filename.c_str(), filename.size(), 0); //;sendto(false, filename);
     } while(status < 0);
+    cout << "file size " << size << endl;
+
+    string filesz = std::to_string(size);
+    // send len
+    len = filesz.size();
+    do {
+        status = ::send(m_sockfd, (void*)&len, sizeof(int), 0);
+    } while(status <= 0);
+    // send fille size
+    do {
+        status = sendto(false, filesz);
+    } while(status <= 0);
 
     cout << savedir << endl;
     cout << "sendfile to client " << endl;
 
-    int sentbytes = 0;
-    int read;
-    while(true) {
-        char buf[BUFSIZE];
-        int read = in.read(buf, BUFSIZE).gcount();
+    long sentbytes = 0;
+    long read;
+    char buf[BUFSIZE];
 
-        // cout<<"bufdata "<<buf<<endl;
-        string msg(buf, read);
-        // cout<<msg;
-        int sent = 0;
-        int cur = 0;
-        while(sent < read) {
-            cur = sendto(false, msg);
-            if(cur <= 0)
-                break;
-            sent += cur;
+    bzero(buf, BUFSIZE);
+    while((read = in.read(buf, BUFSIZE).gcount()) > 0) {
+        if(::send(m_sockfd, buf, read, 0) < 0) {
+            return 1;
         }
-        /*if(!sendto(false, msg)) {
-            cout << "error in sending file" << endl;
-            return false;
-        }*/
-        if(read == 0) {
-            cout << "read size 0 " << read << endl;
-            // indicate to client that it has finished bysending mpty string
-            if(sendto(false, "") < 0) {
-                cout << "error in notifying client " << endl;
-            }
-            break;
-        }
-        cout << "read size " << read << endl;
-        sentbytes += read;
-        memset(buf, 0, BUFSIZE);
+        // cout<<" sent size " <<read<<endl;
+        bzero(buf, BUFSIZE);
     }
     cout << "send completed" << endl;
+    // close();
     return true;
 }
 string chatserver::clientname()
@@ -308,6 +307,7 @@ string chatserver::clientname()
 
 int chatserver::recvfile()
 {
+    int size = 0;
     string savedir = getpath();    // path of client.exe i.e ~/client
     string clientname = "client1"; // get clientname from map
     // create dir for client
@@ -318,31 +318,78 @@ int chatserver::recvfile()
     }
     // wait for filename from server
     string filename;
-    while(recvfrom(filename) <= 0)
-        ;
-    cout << " Recieved filename " << filename << endl;
-    /*if(recsz <= 0) {
-        // error or empty filename
-        cout << " Filename Read error" << endl;
-        return -1;
-    }*/
+    cout << " waiting to recieve filename " << endl;
+    int len = 0;
+    string res = "ok";
+    int status = 0;
+    do {
+        status = ::recv(m_sockfd, &len, sizeof(int), 0);
+    } while(status <= 0);
+    // while(recvfrom(filename)<=0);
+    // recv file name
+    char buf[BUFSIZE];
+    bzero(buf, BUFSIZE);
+    do {
+        status = ::recv(m_sockfd, buf, len, 0);
+        // status =recvfrom(val);//::read(m_sockfd,val,sizeof(int));
+    } while(status <= 0);
+
+    filename = std::string(buf, len);
+    cout << " Recieved file with name " << filename << endl;
+    cout << "waiting for file size" << endl;
+    string val;
+    // uint32_t usz = 0;
+    // size string len
+    do {
+        status = ::recv(m_sockfd, &len, sizeof(int), 0);
+    } while(status <= 0);
+    cout << "here" << endl;
+    cout << len << endl;
+    bzero(buf, BUFSIZE);
+    do {
+        status = ::recv(m_sockfd, buf, len, 0);
+    } while(status <= 0);
+    /*do{
+        //status =::recv(m_sockfd,buf,len,0);
+       status =recvfrom(val);//::read(m_sockfd,val,sizeof(int));
+   }while(status <= 0);*/
+    val = std::string(buf, len);
+    size = std::stoi(val);
+
+    // size = ntohl(usz);
+
+    cout << val << endl;
+    size = std::stoi(val);
+    cout << " Recieved file with size " << size << endl;
+    filename = savedir + "/" + filename;
     std::ofstream out(filename, std::ios::out | std::ios::binary);
     if(!out.is_open()) {
+        cout << "fail to open " << endl;
         return -1;
     }
-    long total;
-    while(true) {
-        string temp;
-        int readsz = recvfrom(temp);
-        total += readsz;
-        if(readsz == 0)
-            break;
+    int total = 0;
+    cout << "Writing to file " << endl;
+    int readsz = 0;
+
+    while(total < size) {
+        // string temp;
+        readsz = ::recv(m_sockfd, buf, BUFSIZE, 0); //;recvfrom(temp);
+
+        // cout<<"readsz "<<readsz<<endl;
         if(readsz < 0) {
             cout << "read error" << endl;
             return -1;
         }
-        out.write(temp.c_str(), temp.size());
+        // cout<<"total" <<total<<endl;
+        out.write(buf, readsz); //;out.write(temp.c_str(), temp.size());
+        total += readsz;
+        memset(buf, 0, readsz);
+        if(readsz == 0)
+            break;
     }
+
+    cout << "read finished " << endl;
+    out.close();
     return total;
 }
 
