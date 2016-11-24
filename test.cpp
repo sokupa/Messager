@@ -12,3 +12,15 @@ char buf[SIZE];
 edit(buf);
 cout<<buf;
 }
+
+vector<string> chatclient::parse(string command)
+{
+    std::stringstream inp = stringstream(command);
+    vector<string> res;
+    string temp;
+    // delimit based on space
+    while(std::getline(inp, temp, ' ')) {
+        res.push_back(temp);
+    }
+    return res;
+}

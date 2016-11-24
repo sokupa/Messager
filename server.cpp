@@ -48,6 +48,7 @@ private:
     static vector<vector<pair<int, int> > > grouplist;
     static unordered_map<int, pair<int, int> > clientmap;
     static unordered_map<string, int> cmdmap;
+    static unordered_map<string, int> cnametosock;
 
 public:
     chatserver()
@@ -68,27 +69,33 @@ public:
     int sendto(int, bool, string out); // send to other sock
     int sendto(int, bool, int);
     int sendto(bool isfile, char (&buf)[BUFSIZE], string msg);
+    int sendto(int sock, bool isfile, char (&buf)[BUFSIZE], string msg);
     int recvfrom(int&);
     int recvfrom(string&);
     int recvfrom(char (&buf)[BUFSIZE], int len); // to do
     void close();
     void sendtoAll();              // broadcast
+    void sendtoAllfile();          // file send to all
     void sendtogroup(chatserver&); // sendto group of client
     void addtoset(const chatserver&);
-    bool sendfile();
-    int recvfile();
+    void blockcast();
+    void blockcastfile();
+    bool sendfile(string, int);
+    int recvfile(string&);
     string getpath();
+    void unicast();
+    void unicastfile();
     int getclientid();
     void sendclientid(chatserver&);
     int getfilesize(std::ifstream& file);
     bool createdir(string);
-    int getcmdid(string&);
+    bool validatecmd(int&, string&);
 };
 unordered_set<int> chatserver::sockets;
 vector<vector<pair<int, int> > > chatserver::grouplist(MAXGROUP);
 unordered_map<int, pair<int, int> > chatserver::clientmap; // store clientid, map pair
 int chatserver::clientid = 0;
-
+unordered_map<string, int> chatserver::cnametosock; // map clientname to sock
 unordered_map<string, int> chatserver::cmdmap = { { "BC", 0 }, { "BC-FILE", 1 }, { "UC", 2 }, { "UC-FILE", 3 },
     { "BLC", 4 }, { "BLC-FILE", 5 } };
 
@@ -122,11 +129,12 @@ bool chatserver::accept(chatserver& newsock)
     if(newsock.m_sockfd <= 0)
         return false;
     // cout<<"serverfd "<<m_sockfd<<endl;
-    // cout << "acceptfd " << newsock.m_sockfd <<endl;
+    cout << "acceptfd " << newsock.m_sockfd << endl;
     std::srand(std::time(0));
     int groupid = std::rand() % MAXGROUP;
     clientmap[newsock.m_sockfd] = make_pair(groupid, clientid);
     // test group rand generate no from 0 to 4 and alot
+    cnametosock["client_" + std::to_string(clientid)] = newsock.m_sockfd;
     grouplist[groupid].push_back(make_pair(clientid++, newsock.m_sockfd));
     addtoset(newsock);
     return true;
@@ -145,11 +153,11 @@ int chatserver::sendto(bool isfile, int const out)
 {
     int status = 0;
     int val = out;
-    //cout << "before sendto int " << out << endl;
+    // cout << "before sendto int " << out << endl;
     do {
         status = ::send(m_sockfd, &val, sizeof(int), 0);
     } while(status <= 0);
-    //cout << "after sendto int" << endl;
+    // cout << "after sendto int" << endl;
     return status;
 }
 
@@ -162,6 +170,17 @@ int chatserver::sendto(int sock, bool isfile, string const out)
     return status;
 }
 
+int chatserver::sendto(int sock, bool isfile, char (&buf)[BUFSIZE], string const msg)
+{
+    int len = msg.size();
+    int status = 0;
+    sendto(sock, false, len); // send buf len
+    strcpy(buf, msg.c_str());
+    do {
+        status = ::send(sock, buf, len, 0);
+    } while(status <= 0);
+    return status;
+}
 int chatserver::sendto(int sock, bool isfile, int const out)
 {
     int status = 0;
@@ -177,12 +196,9 @@ int chatserver::sendto(bool isfile, char (&buf)[BUFSIZE], string msg)
     int status = 0;
     sendto(false, len); // send buf len
     strcpy(buf, msg.c_str());
-    //cout << "buf send before " << endl;
-
     do {
         status = ::send(m_sockfd, buf, len, 0);
     } while(status <= 0);
-    //cout << "buf send after " << endl;
     return status;
 }
 int chatserver::recvfrom(string& inp)
@@ -194,15 +210,10 @@ int chatserver::recvfrom(string& inp)
     char cstr[100];
     memset(cstr, 0, 100);
     int size = 0;
-    // int len = 0;
-    // recvfrom(len);
-    //cout << "Recv from " << m_sockfd << " " << endl;
     do {
         size = ::recv(m_sockfd, cstr, 100, 0);
     } while(size <= 0);
     inp = std::string(cstr, size);
-    //cout << cstr << endl;
-   // cout << "Recv from  after " << inp << endl;
     return size;
 }
 
@@ -210,11 +221,9 @@ int chatserver::recvfrom(char (&buf)[BUFSIZE], int len)
 {
     int status = 0;
     bzero(buf, BUFSIZE);
-    //cout << " recfrom buf before" << endl;
     do {
         status = ::recv(m_sockfd, buf, len, 0);
     } while(status <= 0);
-    //cout << " recfrom buf after" << buf << endl;
     return status;
 }
 
@@ -252,23 +261,147 @@ void chatserver::sendtoAll()
     recvfrom(len);
     recvfrom(buf, len);
     msg = string(buf, len);
-    // recvfrom(msg); // recieve message from client that is broadcasting
-    //cout << "sendtoALl bmsg " << msg << endl;
-    //cout << "sendtoALl socketssize " << sockets.size() << endl;
     for(auto sock : sockets) {
-        cout << "sockfd sendto ALL " << sock << endl;
+        cout << "sockfd sendto ALL " << sock << " msg " << msg << endl;
         if(sock != m_sockfd) // don't broadcast to self
         {
-            // wait and send command type to client
-            sendto(sock, false, 2);
-            sendto(sock, false, "BC");
-            // wait and send message
-            sendto(sock, false, msg.size());
-            sendto(sock, false, msg);
+            sendto(sock, false, buf, "BC");
+            sendto(sock, false, buf, msg);
         }
     }
 }
 
+void chatserver::sendtoAllfile()
+{
+    if(m_sockfd == -1) {
+        return;
+    }
+    string filename;
+    if(recvfile(filename) <= 0) {
+        cout << "error in reciving file " << endl;
+        return;
+    }
+    char buf[BUFSIZE];
+    cout << "file recieved " << endl;
+    for(auto sock : sockets) {
+        if(sock != m_sockfd) // don't broadcast to self
+        {
+            sendto(sock, false, buf, "BC-FILE");
+            cout << "sending file to " << sock << endl;
+            sendfile(filename, sock);
+        }
+    }
+}
+void chatserver::unicast()
+{
+    string msg;
+    char buf[BUFSIZE];
+    int len = 0;
+    recvfrom(len);
+    recvfrom(buf, len);
+    msg = string(buf, len);
+    cout << "unicast message " << msg << endl;
+    string to_client = msg.substr(msg.find_last_of("###") + 1);
+    msg = msg.substr(0, msg.find_first_of("###"));
+    cout << msg << " to_client " << to_client << endl;
+    auto it = cnametosock.find(to_client);
+    if(it == cnametosock.end()) {
+        cout << "Invalid client id" << endl;
+        // client sent invalid name or other client not yet connected
+        // no self id check as it is handled by client itself
+        sendto(false, buf, "$NOK$");              // notify client not valid id
+        sendto(false, buf, "Not a valid client"); // send error
+        return;
+    }
+    sendto(it->second, false, buf, "UC");
+    sendto(it->second, false, buf, msg);
+}
+
+void chatserver::unicastfile()
+{
+    if(m_sockfd == -1) {
+        return;
+    }
+    string to_client;
+    int len = 0;
+    char buf[BUFSIZE];
+    recvfrom(len);
+    recvfrom(buf, len);
+    cout << "len " << len << "buf " << buf << endl;
+    to_client = string(buf, len);
+    auto it = cnametosock.find(to_client);
+    int tosend = m_sockfd;
+    if(it == cnametosock.end()) {
+        cout << "Invalid client id" << endl;
+        // client sent invalid name or other client not yet connected
+        // no self id check as it is handled by client itself
+        sendto(false, buf, "$NOK$");              // notify client not valid id
+        sendto(false, buf, "Not a valid client"); // send error
+        return;
+    }
+    sendto(it->second, false, buf, "UC-FILE");
+    string filename;
+    if(recvfile(filename) > 0) {
+        sendfile(filename, it->second);
+    }
+}
+void chatserver::blockcast()
+{
+    if(m_sockfd == -1) {
+        return;
+    }
+    string msg;
+    int len = 0;
+    char buf[BUFSIZE];
+    recvfrom(len);
+    recvfrom(buf, len);
+    msg = string(buf, len);
+    string to_client = msg.substr(msg.find_last_of("###") + 1);
+    msg = msg.substr(0, msg.find_first_of("###"));
+    auto it = cnametosock.find(to_client);
+    int block = m_sockfd;
+    cout << "blockcast " << msg << " to block " << to_client << endl;
+    if(it != cnametosock.end()) {
+        block = it->second;
+    }
+    cout << "blockcast m_sockfd " << m_sockfd << " to block id " << block << endl;
+    for(auto sock : sockets) {
+        if(sock == m_sockfd || sock == block) // don't broadcast to self
+            continue;
+        sendto(sock, false, buf, "BLC");
+        sendto(sock, false, buf, msg);        
+    }
+}
+
+void chatserver::blockcastfile()
+{
+    if(m_sockfd == -1) {
+        return;
+    }
+    string to_client;
+    int len = 0;
+    char buf[BUFSIZE];
+    recvfrom(len);
+    recvfrom(buf, len);
+    cout << "len " << len << "buf " << buf << endl;
+    to_client = string(buf, len);
+    auto it = cnametosock.find(to_client);
+    int block = m_sockfd;
+    string filename;
+    if(recvfile(filename) <= 0){
+        cout<<"Error in recieving "<<endl;
+        return;        
+    }
+    if(it != cnametosock.end()) {
+        block = it->second;
+    }
+    for(auto sock : sockets) {
+        if(sock == m_sockfd || sock == block) // don't broadcast to self
+            continue;
+        sendto(sock, false, buf, "BLC-FILE");
+        sendfile(filename, sock);
+    }
+}
 void chatserver::sendtogroup(chatserver& server)
 {
     if(m_sockfd == -1) {
@@ -327,16 +460,13 @@ int chatserver::getfilesize(std::ifstream& file)
     return size;
 }
 
-bool chatserver::sendfile()
+bool chatserver::sendfile(string filename, int sockfd)
 {
     string savedir = getpath(); // return path of current exe running
     savedir = savedir + "_dir";
     createdir(savedir);
-    cout << savedir << endl;
-    cout << "enter file name" << endl;
-    string filename;
-    cin >> filename;
     savedir = savedir + "/" + filename;
+    cout << "Saved here: " << savedir << endl;
     std::ifstream in(savedir, std::ios::in | std::ios::binary);
     if(!in) {
         cout << "error in opening file" << endl;
@@ -345,45 +475,25 @@ bool chatserver::sendfile()
     int size = getfilesize(in);
     cout << "sendfilename to client " << filename << endl;
     int status = 0;
-    int len = filename.size();
-    // send filename size
-    do {
-        status = ::send(m_sockfd, (void*)&len, sizeof(int), 0);
-    } while(status <= 0);
+    int len = 0;
+    char buf[BUFSIZE];
+    bzero(buf, BUFSIZE);
     // send filename
-    do {
-        status = ::send(m_sockfd, filename.c_str(), filename.size(), 0); //;sendto(false, filename);
-    } while(status < 0);
+    sendto(sockfd, false, buf, filename);
     cout << "file size " << size << endl;
-
     string filesz = std::to_string(size);
-    // send len
-    len = filesz.size();
-    do {
-        status = ::send(m_sockfd, (void*)&len, sizeof(int), 0);
-    } while(status <= 0);
-    // send fille size
-    do {
-        status = sendto(false, filesz);
-    } while(status <= 0);
-
-    cout << savedir << endl;
-    cout << "sendfile to client " << endl;
-
+    // send filesize
+    sendto(sockfd, false, buf, filesz);
+    cout << "sending file " << endl;
     long sentbytes = 0;
     long read;
-    char buf[BUFSIZE];
-
-    bzero(buf, BUFSIZE);
     while((read = in.read(buf, BUFSIZE).gcount()) > 0) {
-        if(::send(m_sockfd, buf, read, 0) < 0) {
+        if(::send(sockfd, buf, read, 0) < 0) {
             return 1;
         }
-        // cout<<" sent size " <<read<<endl;
         bzero(buf, BUFSIZE);
     }
     cout << "send completed" << endl;
-    // close();
     return true;
 }
 
@@ -393,52 +503,42 @@ void chatserver::sendclientid(chatserver& server)
         cout << "Invalid client" << endl;
         return;
     }
-    //cout << "sendclientid " << m_sockfd << endl;
     auto it = clientmap.find(m_sockfd);
     int id = it->second.second; // stores pair of group and id
     // send id to client;
     sendto(false, id);
 }
 
-int chatserver::recvfile()
+int chatserver::recvfile(string& tosend)
 {
     int size = 0;
     string savedir = getpath(); // path of client.exe i.e ~/client
     savedir = savedir + "_dir";
-    ; // get clientname from map
     if(!createdir(savedir)) {
         cout << "Error in creating dir" << endl;
         return -1;
     }
     // wait for filename from server
     string filename;
+    char buf[BUFSIZE];
+    bzero(buf, BUFSIZE);
     cout << " waiting to recieve filename " << endl;
     int len = 0;
     string res = "ok";
     int status = 0;
-    do {
-        status = ::recv(m_sockfd, &len, sizeof(int), 0);
-    } while(status <= 0);
-    char buf[BUFSIZE];
-    bzero(buf, BUFSIZE);
-    do {
-        status = ::recv(m_sockfd, buf, len, 0);
-        // status =recvfrom(val);//::read(m_sockfd,val,sizeof(int));
-    } while(status <= 0);
+    recvfrom(len);
 
+    recvfrom(buf, len);
     filename = std::string(buf, len);
+    tosend = filename;
     cout << " Recieved file with name " << filename << endl;
     cout << "waiting for file size" << endl;
     string val;
-    do {
-        status = ::recv(m_sockfd, &len, sizeof(int), 0);
-    } while(status <= 0);
+    recvfrom(len);
     cout << "here" << endl;
     cout << len << endl;
     bzero(buf, BUFSIZE);
-    do {
-        status = ::recv(m_sockfd, buf, len, 0);
-    } while(status <= 0);
+    recvfrom(buf, len);
     val = std::string(buf, len);
     size = std::stoi(val);
     cout << val << endl;
@@ -473,35 +573,50 @@ int chatserver::recvfile()
     return total;
 }
 
-int chatserver::getcmdid(string& command)
+bool chatserver::validatecmd(int& cmdid, string& command)
 {
     auto it = cmdmap.find(command);
-    // no need to validate as client will send only after validation
-    return (it->second);
+    if(it != cmdmap.end()) {
+        cmdid = it->second;
+        return true;
+    }
+    return false;
 }
-
 void handler(chatserver newsock)
 {
-    //cout << "handler out" << endl;
     int len = 0;
     string command;
     char buf[BUFSIZE];
     while(true) {
         // wait for command from client
-
-        //cout << "here" << endl;
+        cout << "waiting for command " << endl;
         newsock.recvfrom(len);
-        //cout << "command len " << len << endl;
         bzero(buf, BUFSIZE);
         newsock.recvfrom(buf, len);
         command = string(buf, len);
-        // newsock.recvfrom(command);
-        cout << "from client " << command;
-        int cmdid = newsock.getcmdid(command);
+        cout << "from client " << command << endl;
+        int cmdid = 0;
+        if(newsock.validatecmd(cmdid, command) == false)
+            continue;
         switch(cmdid) {
         case 0: {
             newsock.sendtoAll();
         } break;
+        case 1: {
+            newsock.sendtoAllfile();
+        } break;
+        case 2: {
+            newsock.unicast();
+        } break;
+        case 3: {
+            newsock.unicastfile();
+        } break;
+        case 4: {
+            newsock.blockcast();
+        } break;
+        case 5: {
+            newsock.blockcastfile();
+        }
         }
     }
     cout << "exit handler " << endl;
@@ -520,8 +635,7 @@ int main(int argc, char** argv)
             cout << "conn err " << errno << endl;
             continue;
         }
-        cout << "Accepted new client" << endl;
-
+        cout << "Accepted new client " << endl;
         newsock.sendclientid(server);
         thread th(handler, (newsock));
         th.detach();
