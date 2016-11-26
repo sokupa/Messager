@@ -146,7 +146,7 @@ int chatclient::sendto(bool isfile, char (&buf)[BUFSIZE], string msg)
     do {
         status = ::send(m_sockfd, buf, len, 0);
     } while(status <= 0);
-    printlog("buf send after ");
+    printlog("buf send after "+to_string(status));
     return status;
 }
 
@@ -233,7 +233,6 @@ bool chatclient::createdir(string path)
     } else {
         success = true;
     }
-    cout << success << endl;
     return success;
 }
 
@@ -270,7 +269,7 @@ bool chatclient::sendfile(string filename)
     status = sendto(false, buf, filename);
     // send filename
     // status = sendto(false, filename); //;sendto(false, filename);
-    printlog("file size " + size);
+    printlog("file size " + to_string(size));
     string filesz = std::to_string(size);
     // send len
     len = filesz.size();
