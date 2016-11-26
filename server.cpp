@@ -21,6 +21,7 @@
  * server can be moved in generic socket
  * */
 #define MAXCLIENT 100
+#define DEBUG_LOG false
 #define BASE 6000
 #define MAXGROUP 5
 #define BUFSIZE 256
@@ -34,6 +35,7 @@ using std::unordered_map;
 using std::pair;
 using std::vector;
 using std::make_pair;
+using std::to_string;
 /*class genericsocket(){
 
 };*/
@@ -90,6 +92,7 @@ public:
     int getfilesize(std::ifstream& file);
     bool createdir(string);
     bool validatecmd(int&, string&);
+    void printlog(string);
 };
 unordered_set<int> chatserver::sockets;
 vector<vector<pair<int, int> > > chatserver::grouplist(MAXGROUP);
@@ -99,6 +102,11 @@ unordered_map<string, int> chatserver::cnametosock; // map clientname to sock
 unordered_map<string, int> chatserver::cmdmap = { { "BC", 0 }, { "BC-FILE", 1 }, { "UC", 2 }, { "UC-FILE", 3 },
     { "BLC", 4 }, { "BLC-FILE", 5 } };
 
+void chatserver::printlog(string str)
+{
+    if(DEBUG_LOG)
+        cout << str << endl;
+}
 bool chatserver::create()
 {
     m_sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -128,12 +136,11 @@ bool chatserver::accept(chatserver& newsock)
     newsock.m_sockfd = ::accept(m_sockfd, (sockaddr*)&m_addr, (socklen_t*)&size);
     if(newsock.m_sockfd <= 0)
         return false;
-    // cout<<"serverfd "<<m_sockfd<<endl;
-    cout << "acceptfd " << newsock.m_sockfd << endl;
+    printlog("serverfd "+std::to_string(m_sockfd));
+    printlog("acceptfd "+std::to_string(newsock.m_sockfd));
     std::srand(std::time(0));
     int groupid = std::rand() % MAXGROUP;
     clientmap[newsock.m_sockfd] = make_pair(groupid, clientid);
-    // test group rand generate no from 0 to 4 and alot
     cnametosock["client_" + std::to_string(clientid)] = newsock.m_sockfd;
     grouplist[groupid].push_back(make_pair(clientid++, newsock.m_sockfd));
     addtoset(newsock);
@@ -153,11 +160,11 @@ int chatserver::sendto(bool isfile, int const out)
 {
     int status = 0;
     int val = out;
-    // cout << "before sendto int " << out << endl;
+    printlog("before sendto int "+to_string(out));
     do {
         status = ::send(m_sockfd, &val, sizeof(int), 0);
     } while(status <= 0);
-    // cout << "after sendto int" << endl;
+    printlog("after sendto int");
     return status;
 }
 
@@ -262,7 +269,6 @@ void chatserver::sendtoAll()
     recvfrom(buf, len);
     msg = string(buf, len);
     for(auto sock : sockets) {
-        cout << "sockfd sendto ALL " << sock << " msg " << msg << endl;
         if(sock != m_sockfd) // don't broadcast to self
         {
             sendto(sock, false, buf, "BC");
@@ -282,12 +288,11 @@ void chatserver::sendtoAllfile()
         return;
     }
     char buf[BUFSIZE];
-    cout << "file recieved " << endl;
+    printlog("file recieved " +filename);
     for(auto sock : sockets) {
         if(sock != m_sockfd) // don't broadcast to self
         {
             sendto(sock, false, buf, "BC-FILE");
-            cout << "sending file to " << sock << endl;
             sendfile(filename, sock);
         }
     }
@@ -300,10 +305,10 @@ void chatserver::unicast()
     recvfrom(len);
     recvfrom(buf, len);
     msg = string(buf, len);
-    cout << "unicast message " << msg << endl;
+    printlog("unicast message "+msg);
     string to_client = msg.substr(msg.find_last_of("###") + 1);
     msg = msg.substr(0, msg.find_first_of("###"));
-    cout << msg << " to_client " << to_client << endl;
+    printlog(" to_client "+to_client);
     auto it = cnametosock.find(to_client);
     if(it == cnametosock.end()) {
         cout << "Invalid client id" << endl;
@@ -325,9 +330,11 @@ void chatserver::unicastfile()
     string to_client;
     int len = 0;
     char buf[BUFSIZE];
+    string filename;
     recvfrom(len);
     recvfrom(buf, len);
-    cout << "len " << len << "buf " << buf << endl;
+    printlog("unicast File ");
+    printlog("len " +to_string(len)+" buf "+buf);
     to_client = string(buf, len);
     auto it = cnametosock.find(to_client);
     int tosend = m_sockfd;
@@ -340,7 +347,6 @@ void chatserver::unicastfile()
         return;
     }
     sendto(it->second, false, buf, "UC-FILE");
-    string filename;
     if(recvfile(filename) > 0) {
         sendfile(filename, it->second);
     }
@@ -360,16 +366,15 @@ void chatserver::blockcast()
     msg = msg.substr(0, msg.find_first_of("###"));
     auto it = cnametosock.find(to_client);
     int block = m_sockfd;
-    cout << "blockcast " << msg << " to block " << to_client << endl;
+    printlog("blockcast "+msg+" to block "+to_client );
     if(it != cnametosock.end()) {
         block = it->second;
     }
-    cout << "blockcast m_sockfd " << m_sockfd << " to block id " << block << endl;
     for(auto sock : sockets) {
         if(sock == m_sockfd || sock == block) // don't broadcast to self
             continue;
         sendto(sock, false, buf, "BLC");
-        sendto(sock, false, buf, msg);        
+        sendto(sock, false, buf, msg);
     }
 }
 
@@ -383,14 +388,14 @@ void chatserver::blockcastfile()
     char buf[BUFSIZE];
     recvfrom(len);
     recvfrom(buf, len);
-    cout << "len " << len << "buf " << buf << endl;
+    printlog("len "+to_string(len)+" buf "+buf);
     to_client = string(buf, len);
     auto it = cnametosock.find(to_client);
     int block = m_sockfd;
     string filename;
-    if(recvfile(filename) <= 0){
-        cout<<"Error in recieving "<<endl;
-        return;        
+    if(recvfile(filename) <= 0) {
+        cout << "Error in recieving " << endl;
+        return;
     }
     if(it != cnametosock.end()) {
         block = it->second;
@@ -427,7 +432,7 @@ string chatserver::getpath()
 bool chatserver::createdir(string path)
 {
     bool success = false;
-    cout << "createdir " << path << endl;
+    printlog("creating  dir "+path);
     int created = ::mkdir(path.c_str(), 0775);
     if(created == -1) { // create failed check parent
         switch(errno) { // global in errno.h
@@ -448,7 +453,6 @@ bool chatserver::createdir(string path)
     } else {
         success = true;
     }
-    cout << success << endl;
     return success;
 }
 int chatserver::getfilesize(std::ifstream& file)
@@ -466,25 +470,25 @@ bool chatserver::sendfile(string filename, int sockfd)
     savedir = savedir + "_dir";
     createdir(savedir);
     savedir = savedir + "/" + filename;
-    cout << "Saved here: " << savedir << endl;
+    printlog("Saved here: " + savedir );
     std::ifstream in(savedir, std::ios::in | std::ios::binary);
     if(!in) {
         cout << "error in opening file" << endl;
         return false;
     }
     int size = getfilesize(in);
-    cout << "sendfilename to client " << filename << endl;
+    printlog("sendfilename to client "+filename);
     int status = 0;
     int len = 0;
     char buf[BUFSIZE];
     bzero(buf, BUFSIZE);
     // send filename
     sendto(sockfd, false, buf, filename);
-    cout << "file size " << size << endl;
+    // cout << "file size " << size << endl;
     string filesz = std::to_string(size);
     // send filesize
     sendto(sockfd, false, buf, filesz);
-    cout << "sending file " << endl;
+    printlog("sending file ");
     long sentbytes = 0;
     long read;
     while((read = in.read(buf, BUFSIZE).gcount()) > 0) {
@@ -493,7 +497,7 @@ bool chatserver::sendfile(string filename, int sockfd)
         }
         bzero(buf, BUFSIZE);
     }
-    cout << "send completed" << endl;
+    printlog("send completed");
     return true;
 }
 
@@ -522,28 +526,28 @@ int chatserver::recvfile(string& tosend)
     string filename;
     char buf[BUFSIZE];
     bzero(buf, BUFSIZE);
-    cout << " waiting to recieve filename " << endl;
+    printlog(" waiting to recieve filename ");
     int len = 0;
-    string res = "ok";
     int status = 0;
     recvfrom(len);
-
     recvfrom(buf, len);
     filename = std::string(buf, len);
     tosend = filename;
-    cout << " Recieved file with name " << filename << endl;
-    cout << "waiting for file size" << endl;
+    printlog(" Recieved file with name " + filename );
+    if(filename == "Invalid file"){
+        cout<<"Not a valid filename "<<endl;
+        return -1;
+    }
+    printlog("waiting for file size" );
     string val;
     recvfrom(len);
-    cout << "here" << endl;
-    cout << len << endl;
+    printlog(to_string(len));
     bzero(buf, BUFSIZE);
     recvfrom(buf, len);
     val = std::string(buf, len);
     size = std::stoi(val);
-    cout << val << endl;
     size = std::stoi(val);
-    cout << " Recieved file with size " << size << endl;
+    printlog(" Recieved file with size "+to_string(size));
     filename = savedir + "/" + filename;
     std::ofstream out(filename, std::ios::out | std::ios::binary);
     if(!out.is_open()) {
@@ -551,24 +555,22 @@ int chatserver::recvfile(string& tosend)
         return -1;
     }
     int total = 0;
-    cout << "Writing to file " << endl;
+    printlog("Writing to file ");
     int readsz = 0;
 
     while(total < size) {
-        readsz = ::recv(m_sockfd, buf, BUFSIZE, 0); //;recvfrom(temp);
-        // cout<<"readsz "<<readsz<<endl;
+        readsz = ::recv(m_sockfd, buf, BUFSIZE, 0);
         if(readsz < 0) {
             cout << "read error" << endl;
             return -1;
         }
-        // cout<<"total" <<total<<endl;
         out.write(buf, readsz); //;out.write(temp.c_str(), temp.size());
         total += readsz;
         memset(buf, 0, readsz);
         if(readsz == 0)
             break;
     }
-    cout << "read finished " << endl;
+    printlog("read finished ");
     out.close();
     return total;
 }
@@ -587,14 +589,15 @@ void handler(chatserver newsock)
     int len = 0;
     string command;
     char buf[BUFSIZE];
+    try{
     while(true) {
         // wait for command from client
-        cout << "waiting for command " << endl;
+        newsock.printlog("waiting for command ");
         newsock.recvfrom(len);
         bzero(buf, BUFSIZE);
         newsock.recvfrom(buf, len);
         command = string(buf, len);
-        cout << "from client " << command << endl;
+        newsock.printlog("from client " + command);
         int cmdid = 0;
         if(newsock.validatecmd(cmdid, command) == false)
             continue;
@@ -617,7 +620,14 @@ void handler(chatserver newsock)
         case 5: {
             newsock.blockcastfile();
         }
+        break;
+        default :
+           break;
         }
+    }
+    } catch(std::exception e){
+        cout<< e.what();
+        handler(newsock); //restart
     }
     cout << "exit handler " << endl;
     newsock.close(); // exit loop only on error
